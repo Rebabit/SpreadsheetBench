@@ -31,7 +31,7 @@ echo "=== Agent Inference Trial $TRIAL_ID ==="
 
 python inference_agent.py \
     --dataset spreadsheetbench_verified_400 \
-    --model claude-haiku-4-5-20251001 \
+    --model claude-haiku-4-5 \
     --max-turns 10 \
     --timeout 300 \
     --trial-id "$TRIAL_ID"
@@ -39,18 +39,18 @@ python inference_agent.py \
 echo ""
 echo "=== Post-processing: Recalculate formulas ==="
 DATASET_PATH=$(cd .. && pwd)/data/spreadsheetbench_verified_400
-OUTPUT_DIR="$DATASET_PATH/outputs/agent_claude-haiku-4-5-20251001_trial${TRIAL_ID}"
+OUTPUT_DIR="$DATASET_PATH/outputs/agent_claude-haiku-4-5_trial${TRIAL_ID}"
 bash ../evaluation/recalculate_libreoffice.sh "$OUTPUT_DIR"
 
 echo ""
 echo "=== Evaluation ==="
 cd ../evaluation
 python evaluation.py \
-    --model "claude-haiku-4-5-20251001_trial${TRIAL_ID}" \
+    --model "claude-haiku-4-5_trial${TRIAL_ID}" \
     --setting agent \
     --dataset spreadsheetbench_verified_400 \
     --num-test-cases 1
 
 echo ""
 echo "=== Trial $TRIAL_ID Complete ==="
-echo "Results: ../outputs/eval_agent_claude-haiku-4-5-20251001_trial${TRIAL_ID}.json"
+echo "Results: ../outputs/eval_agent_claude-haiku-4-5_trial${TRIAL_ID}.json"

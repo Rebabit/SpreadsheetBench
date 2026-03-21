@@ -2,9 +2,7 @@
 
 __pycache__
 
-data/sample_data_200
-data/all_data_912
-data/all_data_912_v0.1
+data/
 
 inference/outputs/*
 inference/log/*
