@@ -1,5 +1,8 @@
 import os
 import json
+import shutil
+import subprocess
+import tempfile
 import datetime
 import openpyxl
 import argparse
@@ -236,6 +239,78 @@ def get_answer_filename(task_id, test_case_idx, dataset):
     return f"{test_case_idx}_{task_id}_answer.xlsx"
 
 
+def _detect_soffice():
+    """Find LibreOffice binary."""
+    for candidate in ["libreoffice", "soffice",
+                       "/Applications/LibreOffice.app/Contents/MacOS/soffice"]:
+        if os.path.isfile(candidate) or shutil.which(candidate):
+            return candidate
+    return None
+
+
+def _recalculate_file(soffice, filepath):
+    """Recalculate a single xlsx file in-place via LibreOffice headless."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = subprocess.run(
+            [soffice, "--headless", "--calc",
+             "--convert-to", "xlsx:Calc MS Excel 2007 XML",
+             "--outdir", tmpdir, filepath],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0:
+            return False
+        name = os.path.splitext(os.path.basename(filepath))[0]
+        converted = os.path.join(tmpdir, name + ".xlsx")
+        if not os.path.isfile(converted):
+            return False
+        shutil.move(converted, filepath)
+        return True
+
+
+def recalculate_golden_files(dataset, dataset_path, opt):
+    """Copy golden files to a temp directory and recalculate them via LibreOffice.
+
+    Matches Harbor's test.sh which recalculates both output AND answer files
+    before comparison, preventing false negatives from uncached formula values.
+
+    Returns the recalculated spreadsheet directory (caller should clean up).
+    """
+    soffice = _detect_soffice()
+    if not soffice:
+        print("[ERROR] LibreOffice not found — cannot recalculate golden files.")
+        print("  Install: brew install --cask libreoffice (macOS) or apt install libreoffice-calc (Linux)")
+        return None
+
+    original_spreadsheet_dir = f"{dataset_path}/spreadsheet"
+    recalc_dir = tempfile.mkdtemp(prefix="ssb_recalc_golden_")
+    recalc_spreadsheet_dir = os.path.join(recalc_dir, "spreadsheet")
+
+    print("Copying spreadsheet directory for golden file recalculation...")
+    shutil.copytree(original_spreadsheet_dir, recalc_spreadsheet_dir)
+
+    golden_files = []
+    for data in dataset:
+        task_id = data['id']
+        for tc in range(1, opt.num_test_cases + 1):
+            gt_name = get_answer_filename(task_id, tc, opt.dataset)
+            gt_path = os.path.join(recalc_spreadsheet_dir, str(task_id), gt_name)
+            if os.path.exists(gt_path):
+                golden_files.append(gt_path)
+
+    print(f"Recalculating {len(golden_files)} golden files via LibreOffice...")
+    success = 0
+    failed = 0
+    for filepath in tqdm(golden_files, desc="Recalculating golden files"):
+        if _recalculate_file(soffice, filepath):
+            success += 1
+        else:
+            failed += 1
+            print(f"  FAILED: {filepath}")
+
+    print(f"  Recalculated: {success} succeeded, {failed} failed")
+    return recalc_spreadsheet_dir
+
+
 def parse_option():
     parser = argparse.ArgumentParser("command line arguments for evaluation.")
     
@@ -245,6 +320,9 @@ def parse_option():
     parser.add_argument('--dataset', type=str, default="all_data_912", help='dataset name')
     parser.add_argument('--num-test-cases', type=int, default=3,
         help='number of test cases per task (3 for sample_data_200, 1 for verified_400)')
+    parser.add_argument('--recalculate-golden', action='store_true',
+        help='Recalculate golden files via LibreOffice before evaluation '
+             '(matches Harbor adapter behavior, prevents false negatives from uncached formulas)')
 
     opt = parser.parse_args()
 
@@ -256,12 +334,18 @@ def evaluation(opt):
     with open(f'{dataset_path}/dataset.json', 'r', encoding='utf-8') as fp:
         dataset = json.load(fp)
 
+    # Optionally recalculate golden files to resolve uncached formulas
+    recalc_spreadsheet_dir = None
+    if opt.recalculate_golden:
+        recalc_spreadsheet_dir = recalculate_golden_files(dataset, dataset_path, opt)
+    golden_base = recalc_spreadsheet_dir or f"{dataset_path}/spreadsheet"
+
     eval_results = []
     for data in tqdm(dataset):
         test_case_results = []
         for test_case_idx in range(1, opt.num_test_cases + 1):
             gt_name = get_answer_filename(data['id'], test_case_idx, opt.dataset)
-            gt_path = f"{dataset_path}/spreadsheet/{data['id']}/{gt_name}"
+            gt_path = f"{golden_base}/{data['id']}/{gt_name}"
             proc_path = f"{dataset_path}/outputs/{opt.setting}_{opt.model}/{test_case_idx}_{data['id']}_output.xlsx"
             try:
                 result, _ = compare_workbooks(gt_path, proc_path, data['instruction_type'], data['answer_position'])
@@ -279,6 +363,12 @@ def evaluation(opt):
             'hard_restriction': hard_restriction,
         })
     
+
+    # Clean up temp recalculated directory
+    if recalc_spreadsheet_dir:
+        parent = os.path.dirname(recalc_spreadsheet_dir)
+        if parent.startswith(tempfile.gettempdir()):
+            shutil.rmtree(parent, ignore_errors=True)
 
     # Print summary
     soft_scores = [r['soft_restriction'] for r in eval_results]
