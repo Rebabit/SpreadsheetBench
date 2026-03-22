@@ -98,7 +98,7 @@ def col_name2num(name):
 
 
 def parse_cell_range(range_str):
-    """ Parse a range string like 'A1:AB12' """
+    """ Parse a range string like 'A1:AB12', 'A:G', or 'BD2:308' """
     start_cell, end_cell = range_str.split(':')
     start_col, start_row = '', ''
     for char in start_cell:
@@ -114,14 +114,26 @@ def parse_cell_range(range_str):
         else:
             end_col += char
 
-    return (col_name2num(start_col), int(start_row)), (col_name2num(end_col), int(end_row))
+    start_row = int(start_row) if start_row else None
+    end_row = int(end_row) if end_row else None
+    if not end_col and start_col:
+        end_col = start_col
+    if not start_col and end_col:
+        start_col = end_col
+
+    return (col_name2num(start_col) if start_col else 1, start_row), \
+           (col_name2num(end_col) if end_col else 1, end_row)
 
 
-def generate_cell_names(range_str):
+def generate_cell_names(range_str, max_row=None):
     """ Generate a list of all cell names in the specified range """
     if ':' not in range_str:
         return [range_str]
     (start_col, start_row), (end_col, end_row) = parse_cell_range(range_str)
+    if start_row is None:
+        start_row = 1
+    if end_row is None:
+        end_row = max_row if max_row else 1000
     columns = [col_num2name(i) for i in range(start_col, end_col + 1)]
     cell_names = [f"{col}{row}" for col in columns for row in range(start_row, end_row + 1)]
     return cell_names
@@ -133,7 +145,8 @@ def cell_level_compare(wb_gt, wb_proc, sheet_name, cell_range):
     ws_gt = wb_gt[sheet_name]
     ws_proc = wb_proc[sheet_name]
 
-    cell_names = generate_cell_names(cell_range)
+    max_row = max(ws_gt.max_row or 1, ws_proc.max_row or 1)
+    cell_names = generate_cell_names(cell_range, max_row=max_row)
 
     for cell_name in cell_names:
         cell_gt = ws_gt[cell_name]
@@ -155,8 +168,34 @@ def cell_level_compare(wb_gt, wb_proc, sheet_name, cell_range):
         #     msg = f"Font color difference at cell {cell_gt.coordinate}"
         #     return False, msg
 
-    print("Cell values in the specified range are identical.")
     return True, ""
+
+
+def _split_answer_position(answer_position):
+    """Split answer_position on commas, respecting single-quoted sheet names."""
+    parts = []
+    current = []
+    in_quote = False
+    at_part_start = True
+    for ch in answer_position:
+        if ch == "'" and at_part_start and not in_quote:
+            in_quote = True
+            current.append(ch)
+            at_part_start = False
+        elif ch == "'" and in_quote:
+            in_quote = False
+            current.append(ch)
+        elif ch == "," and not in_quote:
+            parts.append("".join(current).strip())
+            current = []
+            at_part_start = True
+        else:
+            current.append(ch)
+            if ch != " ":
+                at_part_start = False
+    if current:
+        parts.append("".join(current).strip())
+    return parts
 
 
 def compare_workbooks(gt_file, proc_file, instruction_type, answer_position):
@@ -169,24 +208,19 @@ def compare_workbooks(gt_file, proc_file, instruction_type, answer_position):
     except Exception as e:
         return False, str(e)
 
-    # Initialize report
-    result = False
-    msg = ""
-
-    sheet_cell_ranges = answer_position.split(',')
+    sheet_cell_ranges = _split_answer_position(answer_position)
     result_list = []
     msg_list = []
     for sheet_cell_range in sheet_cell_ranges:
+        sheet_cell_range = sheet_cell_range.strip("'")
         if '!' in sheet_cell_range:
-            sheet_name, cell_range = sheet_cell_range.split('!')
-            sheet_name = sheet_name.lstrip("'").rstrip("'")
+            sheet_name, cell_range = sheet_cell_range.split('!', 1)
+            sheet_name = sheet_name.strip("'")
         else:
             sheet_name = wb_gt.sheetnames[0]
             cell_range = sheet_cell_range
-    
-        # process sheet_name and cell_range
-        sheet_name = sheet_name.lstrip("'").rstrip("'")
-        cell_range = cell_range.lstrip("'").rstrip("'")
+
+        cell_range = cell_range.strip("'")
 
         result, msg = cell_level_compare(wb_gt, wb_proc, sheet_name, cell_range)
         result_list.append(result)
@@ -239,7 +273,8 @@ def evaluation(opt):
             proc_path = f"{dataset_path}/outputs/{opt.setting}_{opt.model}/{test_case_idx}_{data['id']}_output.xlsx"
             try:
                 result, _ = compare_workbooks(gt_path, proc_path, data['instruction_type'], data['answer_position'])
-            except:
+            except Exception as e:
+                print(f"[WARN] Task {data['id']} test_case {test_case_idx}: {type(e).__name__}: {e}")
                 result = False
             test_case_results.append(int(result))
         soft_restriction = test_case_results.count(1) / len(test_case_results)
