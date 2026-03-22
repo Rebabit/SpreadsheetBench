@@ -32,8 +32,7 @@ echo "=== Agent Inference Trial $TRIAL_ID ==="
 python inference_agent.py \
     --dataset spreadsheetbench_verified_400 \
     --model claude-haiku-4-5 \
-    --max-turns 10 \
-    --timeout 300 \
+    --timeout 600 \
     --trial-id "$TRIAL_ID"
 
 echo ""

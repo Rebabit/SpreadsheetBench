@@ -50,7 +50,7 @@ def get_input_filename(task_id, dataset):
     return f"1_{task_id}_input.xlsx"
 
 
-def build_agent_instruction(data, input_filename, task_id):
+def build_agent_instruction(data, task_id):
     """Build the instruction prompt for the claude-code agent.
 
     Uses the original SpreadsheetBench PROMPT_NO_DF_RCT_FORMAT 5-field structure
@@ -61,7 +61,8 @@ def build_agent_instruction(data, input_filename, task_id):
     This ensures Exp 3 and Exp 4 use equivalent instructions that match
     the original benchmark format.
     """
-    output_filename = f"1_{task_id}_output.xlsx"
+    spreadsheet_path = f"spreadsheets/1_{task_id}_input.xlsx"
+    output_path = f"output/1_{task_id}_output.xlsx"
 
     return f"""You are a spreadsheet expert who can manipulate spreadsheets through Python code.
 
@@ -77,7 +78,7 @@ Below is the spreadsheet manipulation question you need to solve:
 {data['instruction']}
 
 ### spreadsheet_path
-{input_filename}
+{spreadsheet_path}
 
 ### instruction_type
 {data['instruction_type']}
@@ -86,7 +87,7 @@ Below is the spreadsheet manipulation question you need to solve:
 {data['answer_position']}
 
 ### output_path
-{output_filename}
+{output_path}
 
 You should generate Python code for the final solution of the question.
 """
@@ -112,31 +113,44 @@ def run_agent_on_task(data, dataset_path, output_dir, opt):
 
     # Create a temp working directory
     with tempfile.TemporaryDirectory(prefix=f"ssb_{task_id}_") as tmpdir:
-        # Copy input spreadsheet
-        shutil.copy2(input_path, f"{tmpdir}/{input_filename}")
+        os.makedirs(f"{tmpdir}/spreadsheets")
+        os.makedirs(f"{tmpdir}/output")
+        normalized_input = f"1_{task_id}_input.xlsx"
+        shutil.copy2(input_path, f"{tmpdir}/spreadsheets/{normalized_input}")
 
         # Build instruction
-        instruction = build_agent_instruction(data, input_filename, task_id)
+        instruction = build_agent_instruction(data, task_id)
+
+        # Build CLI args
+        cmd = [
+            "claude",
+            "--verbose",
+            "--print",
+            "--model", opt.model,
+            "--permission-mode=bypassPermissions",
+        ]
+        if opt.max_turns > 0:
+            cmd.extend(["--max-turns", str(opt.max_turns)])
+        cmd.append(instruction)
+
+        # Build env
+        agent_env = {
+            k: v for k, v in os.environ.items()
+            if k not in ("CLAUDECODE", "CLAUDE_CODE")
+        }
+        agent_env["FORCE_AUTO_BACKGROUND_TASKS"] = "1"
+        agent_env["ENABLE_BACKGROUND_TASKS"] = "1"
+        agent_env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 
         # Run claude-code
         try:
             result = subprocess.run(
-                [
-                    "claude",
-                    "--print",
-                    "--model", opt.model,
-                    "--max-turns", str(opt.max_turns),
-                    "--dangerously-skip-permissions",
-                    instruction,
-                ],
+                cmd,
                 cwd=tmpdir,
                 capture_output=True,
                 text=True,
                 timeout=opt.timeout,
-                env={
-                    k: v for k, v in os.environ.items()
-                    if k not in ("CLAUDECODE", "CLAUDE_CODE")
-                },
+                env=agent_env,
             )
 
             agent_output = result.stdout
@@ -149,7 +163,7 @@ def run_agent_on_task(data, dataset_path, output_dir, opt):
             return {"id": task_id, "status": "error", "error": str(e)}
 
         # Collect output spreadsheet
-        output_in_tmp = f"{tmpdir}/{output_filename}"
+        output_in_tmp = f"{tmpdir}/output/{output_filename}"
         if os.path.exists(output_in_tmp):
             shutil.copy2(output_in_tmp, output_dest)
             return {
@@ -159,8 +173,8 @@ def run_agent_on_task(data, dataset_path, output_dir, opt):
             }
         else:
             # Check if agent wrote to a different location
-            xlsx_files = list(Path(tmpdir).glob("*.xlsx"))
-            non_input = [f for f in xlsx_files if f.name != input_filename]
+            xlsx_files = list(Path(tmpdir).rglob("*.xlsx"))
+            non_input = [f for f in xlsx_files if f.name != normalized_input]
             if non_input:
                 # Use the first non-input xlsx as output
                 shutil.copy2(str(non_input[0]), output_dest)
@@ -183,11 +197,11 @@ def main():
     parser = argparse.ArgumentParser("Agent-style inference using claude-code CLI")
     parser.add_argument('--dataset', type=str, default='spreadsheetbench_verified_400',
                         help='dataset name')
-    parser.add_argument('--model', type=str, default='claude-haiku-4-5-20251001',
+    parser.add_argument('--model', type=str, default='claude-haiku-4-5',
                         help='claude-code model')
-    parser.add_argument('--max-turns', type=int, default=10,
-                        help='max claude-code turns per task')
-    parser.add_argument('--timeout', type=int, default=300,
+    parser.add_argument('--max-turns', type=int, default=0,
+                        help='max claude-code turns per task (0 = unlimited)')
+    parser.add_argument('--timeout', type=int, default=600,
                         help='timeout per task in seconds')
     parser.add_argument('--limit', type=int, default=0,
                         help='limit number of tasks (0 = all)')

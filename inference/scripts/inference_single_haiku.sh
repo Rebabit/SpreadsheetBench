@@ -19,7 +19,7 @@ if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
 fi
 
 python inference_single.py \
-    --model claude-haiku-4-5-20251001 \
+    --model claude-haiku-4-5 \
     --api_key "$ANTHROPIC_API_KEY" \
     --base_url "https://api.anthropic.com/v1/" \
     --dataset spreadsheetbench_verified_400 \
