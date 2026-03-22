@@ -5,9 +5,6 @@ import openpyxl
 import argparse
 import numpy as np
 from tqdm import tqdm
-from collections import defaultdict
-from openpyxl.styles import PatternFill, Font
-
 
 # Tasks in verified_400 with bare naming (golden.xlsx, no ID prefix)
 BARE_NAMING_IDS = {"13284", "32023", "32789", "56274", "58109"}
@@ -237,11 +234,6 @@ def get_answer_filename(task_id, test_case_idx, dataset):
         golden_id = MISMATCHED_IDS.get(str(task_id), str(task_id))
         return f"{test_case_idx}_{golden_id}_golden.xlsx"
     return f"{test_case_idx}_{task_id}_answer.xlsx"
-
-
-def get_output_filename(task_id, test_case_idx, dataset):
-    """Get the LLM output filename to evaluate."""
-    return f"{test_case_idx}_{task_id}_output.xlsx"
 
 
 def parse_option():
