@@ -2,20 +2,6 @@
 
 This fork adds agent-style inference and evaluation fixes for running parity experiments against [Harbor](https://github.com/harbor-framework/harbor) on the `spreadsheetbench_verified_400` dataset.
 
-## What's Changed vs. Upstream
-
-### Agent Implementation
-
-`inference/inference_agent.py` runs [claude-code](https://github.com/anthropics/claude-code) as an agent on each task: it copies the input spreadsheet to a temp directory, invokes the CLI with the task instruction, and collects the output. This replaces the upstream Docker-based code execution with a single agentic loop.
-
-### Evaluation Fixes
-
-The upstream `evaluation.py` has bugs that cause **11 out of 400 tasks** to produce incorrect results on `verified_400`:
-
-- **6 tasks always fail** due to file naming inconsistencies — 5 tasks use bare filenames (`golden.xlsx` instead of `1_{id}_golden.xlsx`) and 1 task has a mismatched ID in the golden filename (`1_43930_golden.xlsx` for task 42930).
-- **4 tasks always fail** due to `answer_position` parsing crashes — column-only ranges like `A:G`, commas inside quoted sheet names like `'b2b, sez, de'!A5:V10`, non-breaking spaces, and spaces after commas in multi-range positions.
-- **1 task always passes** regardless of output — `BD2:308` generates an empty cell range so the comparison is vacuously true.
-
 ## Running the Parity Test
 
 ### Prerequisites
@@ -75,6 +61,30 @@ python evaluation.py \
     --dataset spreadsheetbench_verified_400 \
     --num-test-cases 1
 ```
+
+## What's Changed vs. Upstream
+
+### Agent Implementation
+
+`inference/inference_agent.py` runs [claude-code](https://github.com/anthropics/claude-code) as an agent on each task: it copies the input spreadsheet to a temp directory, invokes the CLI with the task instruction, and collects the output. This replaces the upstream Docker-based code execution with a single agentic loop.
+
+### Evaluation Fixes
+
+The upstream `evaluation.py` has bugs that cause **11 out of 400 tasks** to produce incorrect results on `verified_400`:
+
+- **6 tasks always fail** due to file naming inconsistencies — 5 tasks use bare filenames (`golden.xlsx` instead of `1_{id}_golden.xlsx`) and 1 task has a mismatched ID in the golden filename (`1_43930_golden.xlsx` for task 42930).
+- **4 tasks always fail** due to `answer_position` parsing crashes — column-only ranges like `A:G`, commas inside quoted sheet names like `'b2b, sez, de'!A5:V10`, non-breaking spaces, and spaces after commas in multi-range positions.
+- **1 task always passes** regardless of output — `BD2:308` generates an empty cell range so the comparison is vacuously true.
+
+### Prompt Changes
+The agent run uses an adjusted prompt so the task matches an agentic file-based workflow rather than the original container-based LLM workflow. Concretely, we keep the same task definition (`instruction`, `spreadsheet_path`, `instruction_type`, `answer_position`, `output_path`), but make three changes:
+
+- We remove `spreadsheet_content` from the prompt. The original single-round LLM setup inlined the first few rows of each sheet because the model could not inspect the spreadsheet directly. In this fork, the agent can open the `.xlsx` file itself, so that preview is unnecessary.
+- We replace executor paths such as `/mnt/data/spreadsheet/.../1_12345_input.xlsx` and `/mnt/data/outputs/.../1_12345_output.xlsx` with local workspace paths such as `spreadsheets/1_12345_input.xlsx` and `output/1_12345_output.xlsx`.
+- We omit the explicit multi-round ReAct instructions ("you can use up to N rounds", "information acquisition", "execution feedback"). The original multi-round LLM baseline needed those instructions because the benchmark code managed the loop externally. Here, the agent already has its own read/execute/fix loop.
+
+Example: instead of telling the model "here are the first 5 rows of the workbook, the file is at `/mnt/data/...`, and you may use multiple rounds with execution feedback", this fork tells the agent "the workbook is at `spreadsheets/1_12345_input.xlsx`, write Python code that produces `output/1_12345_output.xlsx`". This keeps the benchmark task itself the same while adapting the prompt to how an agent actually operates.
+
 
 ---
 
