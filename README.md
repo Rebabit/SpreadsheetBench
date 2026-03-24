@@ -1,3 +1,83 @@
+# Harbor Parity Fork
+
+This fork adds agent-style inference and evaluation fixes for running parity experiments against [Harbor](https://github.com/harbor-framework/harbor) on the `spreadsheetbench_verified_400` dataset.
+
+## What's Changed vs. Upstream
+
+### Agent Implementation
+
+`inference/inference_agent.py` runs [claude-code](https://github.com/anthropics/claude-code) as an agent on each task: it copies the input spreadsheet to a temp directory, invokes the CLI with the task instruction, and collects the output. This replaces the upstream Docker-based code execution with a single agentic loop.
+
+### Evaluation Fixes
+
+The upstream `evaluation.py` has bugs that cause **11 out of 400 tasks** to produce incorrect results on `verified_400`:
+
+- **6 tasks always fail** due to file naming inconsistencies — 5 tasks use bare filenames (`golden.xlsx` instead of `1_{id}_golden.xlsx`) and 1 task has a mismatched ID in the golden filename (`1_43930_golden.xlsx` for task 42930).
+- **4 tasks always fail** due to `answer_position` parsing crashes — column-only ranges like `A:G`, commas inside quoted sheet names like `'b2b, sez, de'!A5:V10`, non-breaking spaces, and spaces after commas in multi-range positions.
+- **1 task always passes** regardless of output — `BD2:308` generates an empty cell range so the comparison is vacuously true.
+
+## Running the Parity Test
+
+### Prerequisites
+
+Follow the existing setup instructions in this README first:
+
+- `Environment Setup` (install Python dependencies and spreadsheet backend requirements)
+- `Inference -> Code Execution Environment` (if you plan to run upstream Docker-based inference too)
+- `Evaluation -> Recalculate Spreadsheet Formulas` (LibreOffice/Excel backend details)
+
+Additional parity-specific requirements:
+
+- `claude-code` CLI installed: `npm install -g @anthropic-ai/claude-code`
+- `ANTHROPIC_API_KEY` environment variable set
+- `verified_400` dataset extracted in `data/spreadsheetbench_verified_400/`
+
+Quick setup commands (macOS/Linux):
+
+```bash
+# from repo root
+pip install -r requirements.txt
+
+# install LibreOffice (pick one)
+brew install --cask libreoffice           # macOS
+# sudo apt install libreoffice-calc       # Ubuntu/Debian
+
+# install claude-code CLI
+npm install -g @anthropic-ai/claude-code
+
+# set API key for current shell
+export ANTHROPIC_API_KEY="your_key_here"
+
+# extract verified_400 dataset (from repo root)
+tar -xzf data/spreadsheetbench_verified_400.tar.gz -C data/
+```
+
+### Run
+
+```bash
+cd inference/
+bash scripts/inference_agent_haiku.sh           # Run 1
+bash scripts/inference_agent_haiku.sh 2         # Run 2
+bash scripts/inference_agent_haiku.sh 3         # Run 3
+```
+
+The script runs three steps: (1) agent inference on all 400 tasks (skips tasks with existing output), (2) LibreOffice formula recalculation, and (3) evaluation. Results are saved to `outputs/eval_agent_claude-haiku-4-5_trial{N}.json`.
+
+For comparison with Harbor adapter results, see the [Harbor](https://github.com/harbor-framework/harbor) repository in the `adapters/spreadsheetbench-verified` folder.
+
+To re-run evaluation only:
+
+```bash
+cd evaluation/
+python evaluation.py \
+    --model "claude-haiku-4-5_trial1" \
+    --setting agent \
+    --dataset spreadsheetbench_verified_400 \
+    --num-test-cases 1
+```
+
+---
+
 # [NeurIPS 2024] SpreadsheetBench: Towards Challenging Real World Spreadsheet Manipulation
 
 [Homepage](https://spreadsheetbench.github.io/) · [Paper](https://arxiv.org/abs/2406.14991) · [Data](https://github.com/RUCKBReasoning/SpreadsheetBench/tree/main/data)
